@@ -34,6 +34,7 @@ class Review(Base):
     sections: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # Structured review output
     overall_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    callback_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )

@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class FeedbackSection(BaseModel):
@@ -15,6 +15,10 @@ class ReviewCreate(BaseModel):
     profile_id: UUID
 
 
+class WebhookRegister(BaseModel):
+    callback_url: HttpUrl
+
+
 class ReviewResponse(BaseModel):
     id: UUID
     profile_id: UUID
@@ -22,6 +26,7 @@ class ReviewResponse(BaseModel):
     sections: list[FeedbackSection] | None
     overall_score: float | None
     error_message: str | None = None
+    callback_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

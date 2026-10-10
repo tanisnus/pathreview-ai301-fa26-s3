@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from core.services.review_service import (
+    _deliver_webhook_if_registered,
     create_review,
     get_review,
     list_reviews,
@@ -377,3 +378,69 @@ class TestReviewService:
 
         # Should order by created_at descending
         mock_db_session.execute.assert_called_once()
+
+
+@pytest.mark.unit
+class TestDeliverWebhookIfRegistered:
+    """Test suite for _deliver_webhook_if_registered()."""
+
+    @pytest.fixture
+    def mock_db_session(self):
+        session = AsyncMock()
+        session.refresh = AsyncMock()
+        return session
+
+    @pytest.mark.asyncio
+    async def test_delivers_when_callback_url_set_after_refresh(self, mock_db_session):
+        """A callback_url present after the refresh triggers delivery."""
+        review = Mock()
+        review.callback_url = "http://127.0.0.1:9999/hook"
+
+        with (
+            patch("core.services.review_service.ReviewResponse") as MockReviewResponse,
+            patch("core.services.review_service.deliver_webhook", new=AsyncMock()) as mock_deliver,
+        ):
+            MockReviewResponse.model_validate.return_value.model_dump.return_value = {
+                "status": "complete"
+            }
+
+            await _deliver_webhook_if_registered(mock_db_session, review)
+
+        mock_db_session.refresh.assert_called_once_with(review, ["callback_url"])
+        mock_deliver.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_does_not_deliver_when_no_callback_url(self, mock_db_session):
+        """No callback_url after the refresh means no delivery attempt."""
+        review = Mock()
+        review.callback_url = None
+
+        with patch("core.services.review_service.deliver_webhook", new=AsyncMock()) as mock_deliver:
+            await _deliver_webhook_if_registered(mock_db_session, review)
+
+        mock_db_session.refresh.assert_called_once_with(review, ["callback_url"])
+        mock_deliver.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_refreshes_before_checking_callback_url(self, mock_db_session):
+        """The refresh must happen before the callback_url check, not after."""
+        review = Mock()
+        review.callback_url = None
+        call_order = []
+
+        async def record_refresh(*args, **kwargs):
+            call_order.append("refresh")
+            review.callback_url = "http://127.0.0.1:9999/hook"
+
+        mock_db_session.refresh = AsyncMock(side_effect=record_refresh)
+
+        with (
+            patch("core.services.review_service.ReviewResponse") as MockReviewResponse,
+            patch("core.services.review_service.deliver_webhook", new=AsyncMock()) as mock_deliver,
+        ):
+            MockReviewResponse.model_validate.return_value.model_dump.return_value = {}
+            mock_deliver.side_effect = lambda *a, **k: call_order.append("deliver")
+
+            await _deliver_webhook_if_registered(mock_db_session, review)
+
+        assert call_order == ["refresh", "deliver"]

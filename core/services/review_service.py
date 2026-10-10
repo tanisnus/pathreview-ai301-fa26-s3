@@ -5,12 +5,28 @@ from uuid import UUID
 import structlog
 from sqlalchemy import and_, select
 
-from api.schemas.review import FeedbackSection
+from api.schemas.review import FeedbackSection, ReviewResponse
 from core.models.ingested_source import IngestedSource
 from core.models.profile import Profile
 from core.models.review import Review
+from core.services.webhook_service import deliver_webhook
 
 log = structlog.get_logger()
+
+
+async def _deliver_webhook_if_registered(db, review: Review) -> None:
+    """
+    Call at a terminal status transition, after that transition's own
+    commit. Writing the status first and only then refreshing is what lets
+    this see a callback_url registered concurrently by another request:
+    expire_on_commit=False means a plain re-select on this same long-lived
+    session would just hand back the object already loaded, not its
+    current row.
+    """
+    await db.refresh(review, ["callback_url"])
+    if review.callback_url:
+        payload = ReviewResponse.model_validate(review).model_dump(mode="json")
+        await deliver_webhook(review.callback_url, payload, str(review.id))
 
 
 async def create_review(
@@ -116,6 +132,7 @@ async def process_review(
             review.status = "failed"
             db.add(review)
             await db.commit()
+            await _deliver_webhook_if_registered(db, review)
             return
 
         # Step 1: Set status to processing
@@ -152,6 +169,7 @@ async def process_review(
             review.status = "failed"
             db.add(review)
             await db.commit()
+            await _deliver_webhook_if_registered(db, review)
             return
 
         # Step 6: Set status to complete and store sections
@@ -179,6 +197,7 @@ async def process_review(
             review_id=str(review_id),
             overall_score=review.overall_score,
         )
+        await _deliver_webhook_if_registered(db, review)
 
     except Exception as exc:
         log.error("review_processing_failed", review_id=str(review_id), error=str(exc))
@@ -191,6 +210,7 @@ async def process_review(
                 review.updated_at = datetime.utcnow()
                 db.add(review)
                 await db.commit()
+                await _deliver_webhook_if_registered(db, review)
         except Exception as e:
             log.error("review_status_update_failed", review_id=str(review_id), error=str(e))
 
